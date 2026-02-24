@@ -27,7 +27,7 @@ export function ThemeSwitcher() {
     <>
       {/* Floating Button */}
       <motion.button
-        className="fixed bottom-6 right-6 z-50 p-4 bg-gradient-to-r from-indigo-600 to-cyan-600 text-white rounded-full shadow-2xl hover:shadow-3xl transition-shadow"
+        className="fixed bottom-6 left-6 z-40 p-4 bg-gradient-to-r from-indigo-600 to-cyan-600 text-white rounded-full shadow-2xl hover:shadow-3xl transition-shadow"
         whileHover={{ scale: 1.1 }}
         whileTap={{ scale: 0.9 }}
         onClick={() => setIsOpen(true)}

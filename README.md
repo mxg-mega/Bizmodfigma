@@ -1,7 +1,7 @@
 
-  # Create BizMod Logo Animation
+  # Bizmod
 
-  This is a code bundle for Create BizMod Logo Animation. The original project is available at https://www.figma.com/design/hoRqq0FQNVqvL9feoV8oWP/Create-BizMod-Logo-Animation.
+  This is a code bundle for Bizmod. The original project is available at https://www.figma.com/design/hoRqq0FQNVqvL9feoV8oWP/Bizmod.
 
   ## Running the code
 

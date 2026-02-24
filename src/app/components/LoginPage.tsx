@@ -2,6 +2,7 @@ import { motion } from "motion/react";
 import { useState } from "react";
 import { Eye, EyeOff, Mail, Lock, ArrowRight, Chrome, Apple } from "lucide-react";
 import { useTheme } from "../context/ThemeContext";
+import { useAuth } from "../context/AuthContext";
 
 interface LoginPageProps {
   onBack?: () => void;
@@ -12,6 +13,7 @@ interface LoginPageProps {
 export function LoginPage({ onBack, onLoginSuccess, onSignupSuccess }: LoginPageProps) {
   const { getThemeClasses } = useTheme();
   const theme = getThemeClasses();
+  const { signIn, signUp, signInWithGoogle } = useAuth();
 
   const [showPassword, setShowPassword] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
@@ -19,32 +21,89 @@ export function LoginPage({ onBack, onLoginSuccess, onSignupSuccess }: LoginPage
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setSuccessMessage("");
+    setLoading(true);
     
-    // Dummy login validation
-    if (!isSignUp) {
-      // Login validation
-      if ((email === "demo@bizmod.ng" || email === "test@business.com") && password === "BizMod2024!") {
-        // Successful login
+    try {
+      if (!isSignUp) {
+        // Login
+        const { error: signInError } = await signIn(email, password);
+        
+        if (signInError) {
+          setError(signInError.message || "Invalid credentials");
+          setLoading(false);
+          return;
+        }
+        
+        // Success - will be redirected by auth state change
+        setLoading(false);
         if (onLoginSuccess) {
           onLoginSuccess(email);
         }
       } else {
-        setError("Invalid credentials. Try: demo@bizmod.ng / BizMod2024!");
-      }
-    } else {
-      // Signup - just validate fields
-      if (name && email && password) {
+        // Signup
+        if (!name || !email || !password) {
+          setError("Please fill in all fields");
+          setLoading(false);
+          return;
+        }
+        
+        if (password.length < 6) {
+          setError("Password must be at least 6 characters");
+          setLoading(false);
+          return;
+        }
+        
+        const { error: signUpError } = await signUp(email, password, name);
+        
+        if (signUpError) {
+          setError(signUpError.message || "Signup failed");
+          setLoading(false);
+          return;
+        }
+        
+        // Account created successfully - user is now logged in
+        setSuccessMessage(
+          "Account created successfully! You are now logged in."
+        );
+        setLoading(false);
+        
+        // Call success callback if provided
         if (onSignupSuccess) {
           onSignupSuccess(email, name);
         }
-      } else {
-        setError("Please fill in all fields");
+        
+        // Auto-close success message after 2 seconds
+        setTimeout(() => {
+          setSuccessMessage("");
+        }, 2000);
       }
+    } catch (err) {
+      setError("An unexpected error occurred");
+      setLoading(false);
     }
+  };
+  
+  const handleGoogleSignIn = async () => {
+    setError("");
+    setSuccessMessage("");
+    setLoading(true);
+    
+    const { error: googleError } = await signInWithGoogle();
+    
+    if (googleError) {
+      setError(googleError.message || "Google sign-in failed");
+      setLoading(false);
+    }
+    
+    // Note: For Google OAuth to work, you need to configure it in your Supabase dashboard
+    // Follow instructions at https://supabase.com/docs/guides/auth/social-login/auth-google
   };
 
   return (
@@ -112,6 +171,7 @@ export function LoginPage({ onBack, onLoginSuccess, onSignupSuccess }: LoginPage
               className="w-full flex items-center justify-center gap-3 px-6 py-3 bg-white border-2 border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
+              onClick={handleGoogleSignIn}
             >
               <Chrome size={20} />
               <span>Continue with Google</span>
@@ -145,6 +205,16 @@ export function LoginPage({ onBack, onLoginSuccess, onSignupSuccess }: LoginPage
                 animate={{ opacity: 1, y: 0 }}
               >
                 {error}
+              </motion.div>
+            )}
+
+            {successMessage && (
+              <motion.div
+                className="p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm"
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                {successMessage}
               </motion.div>
             )}
 
@@ -252,6 +322,7 @@ export function LoginPage({ onBack, onLoginSuccess, onSignupSuccess }: LoginPage
               className={`${theme.buttonPrimary} w-full flex items-center justify-center gap-2`}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
+              disabled={loading}
             >
               {isSignUp ? "Create Account" : "Sign In"}
               <ArrowRight size={20} />
