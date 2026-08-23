@@ -494,4 +494,90 @@ app.get("/make-server-6451509a/sales/:businessId/metrics", async (c) => {
   }
 });
 
+// ====== USER PREFERENCES & ONBOARDING ======
+
+// Sign up a new user
+app.post("/make-server-6451509a/signup", async (c) => {
+  try {
+    const body = await c.req.json();
+    const { email, password, name } = body;
+
+    if (!email || !password || !name) {
+      return c.json({ error: "Email, password, and name are required" }, 400);
+    }
+
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+
+    // Create user with admin API
+    const { data, error } = await supabase.auth.admin.createUser({
+      email: email.trim().toLowerCase(),
+      password: password.trim(),
+      user_metadata: { name: name.trim() },
+      // Automatically confirm the user's email since an email server hasn't been configured.
+      email_confirm: true,
+    });
+
+    if (error) {
+      console.log("Error creating user:", error);
+      return c.json({ error: error.message }, 400);
+    }
+
+    console.log("User created successfully:", data.user?.id);
+    return c.json({ 
+      user: data.user,
+      message: "User created successfully. You can now sign in."
+    });
+  } catch (error) {
+    console.log("Error in signup endpoint:", error);
+    return c.json({ error: "Failed to create user" }, 500);
+  }
+});
+
+// Get user preferences (including onboarding status)
+app.get("/make-server-6451509a/user/preferences", async (c) => {
+  try {
+    const accessToken = c.req.header("Authorization")?.split(" ")[1];
+    const userId = await getUserId(accessToken);
+    if (!userId) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const preferences = await kv.get(`user:${userId}:preferences`);
+    return c.json({ preferences: preferences || { onboardingCompleted: false } });
+  } catch (error) {
+    console.log("Error fetching user preferences:", error);
+    return c.json({ error: "Failed to fetch preferences" }, 500);
+  }
+});
+
+// Update user preferences (including onboarding status)
+app.post("/make-server-6451509a/user/preferences", async (c) => {
+  try {
+    const accessToken = c.req.header("Authorization")?.split(" ")[1];
+    const userId = await getUserId(accessToken);
+    if (!userId) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+
+    const body = await c.req.json();
+    
+    // Get existing preferences or create new
+    const existing = await kv.get(`user:${userId}:preferences`) || {};
+    const preferences = {
+      ...existing,
+      ...body,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await kv.set(`user:${userId}:preferences`, preferences);
+    return c.json({ preferences });
+  } catch (error) {
+    console.log("Error updating user preferences:", error);
+    return c.json({ error: "Failed to update preferences" }, 500);
+  }
+});
+
 Deno.serve(app.fetch);

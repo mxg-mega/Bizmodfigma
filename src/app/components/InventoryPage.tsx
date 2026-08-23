@@ -48,7 +48,6 @@ export function InventoryPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showStockModal, setShowStockModal] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
   const apiUrl = `https://${projectId}.supabase.co/functions/v1/make-server-6451509a`;
 
@@ -58,9 +57,39 @@ export function InventoryPage() {
     return { Authorization: `Bearer ${accessToken}` };
   };
 
+  // Helper to detect if we're in demo mode (using mock tokens)
+  const isDemoMode = () => {
+    try {
+      const sessionStr = localStorage.getItem('supabase.auth.token');
+      if (!sessionStr) return false;
+      const session = JSON.parse(sessionStr);
+      const token = session?.currentSession?.access_token;
+      // Demo tokens start with 'token-' or are 'demo-token'
+      return token && (token.startsWith('token-') || token === 'demo-token');
+    } catch {
+      return false;
+    }
+  };
+
   const fetchProducts = async () => {
     if (!currentBusiness) return;
     
+    // In demo mode, load from localStorage
+    if (isDemoMode()) {
+      console.log('📝 Demo mode - loading products from localStorage');
+      try {
+        const localProducts = localStorage.getItem(`products-${currentBusiness.id}`);
+        setProducts(localProducts ? JSON.parse(localProducts) : []);
+      } catch (error) {
+        console.error('Error loading products from localStorage:', error);
+        setProducts([]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+    
+    // Real Supabase mode - fetch from server
     try {
       const response = await fetch(`${apiUrl}/products/${currentBusiness.id}`, {
         headers: getAuthHeader(),
@@ -69,7 +98,14 @@ export function InventoryPage() {
       setProducts(data.products || []);
     } catch (error) {
       console.error("Error fetching products:", error);
-      toast.error("Failed to fetch products");
+      // Fallback to localStorage if server fails
+      try {
+        const localProducts = localStorage.getItem(`products-${currentBusiness.id}`);
+        setProducts(localProducts ? JSON.parse(localProducts) : []);
+      } catch {
+        setProducts([]);
+      }
+      toast.error("Failed to fetch products from server, loaded local data");
     } finally {
       setLoading(false);
     }
@@ -82,6 +118,47 @@ export function InventoryPage() {
   const handleCreateProduct = async (productData: Partial<Product>) => {
     if (!currentBusiness) return;
 
+    // In demo mode, save to localStorage
+    if (isDemoMode()) {
+      console.log('📝 Demo mode - creating product locally');
+      try {
+        const productId = crypto.randomUUID();
+        const newProduct: Product = {
+          id: productId,
+          businessId: currentBusiness.id,
+          name: productData.name || '',
+          description: productData.description || '',
+          sku: productData.sku || '',
+          category: productData.category || 'General',
+          unitType: productData.unitType || 'piece',
+          price: productData.price || 0,
+          costPrice: productData.costPrice || 0,
+          trackInventory: productData.trackInventory !== false,
+          stockByLocation: {},
+          minStockLevel: productData.minStockLevel || 0,
+          maxStockLevel: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        const localProducts = localStorage.getItem(`products-${currentBusiness.id}`);
+        const allProducts = localProducts ? JSON.parse(localProducts) : [];
+        allProducts.push(newProduct);
+        localStorage.setItem(`products-${currentBusiness.id}`, JSON.stringify(allProducts));
+
+        toast.success("Product created successfully");
+        fetchProducts();
+        setShowAddModal(false);
+        setEditingProduct(null);
+        console.log('✅ Product created locally:', newProduct);
+      } catch (error) {
+        console.error('Error creating product locally:', error);
+        toast.error("Failed to create product");
+      }
+      return;
+    }
+
+    // Real Supabase mode - call server
     try {
       const response = await fetch(`${apiUrl}/products/${currentBusiness.id}`, {
         method: "POST",
@@ -175,7 +252,7 @@ export function InventoryPage() {
         toast.success("Stock updated successfully");
         fetchProducts();
         setShowStockModal(false);
-        setSelectedProduct(null);
+        setEditingProduct(null);
       } else {
         toast.error(data.error || "Failed to update stock");
       }
@@ -388,7 +465,7 @@ export function InventoryPage() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <button
                           onClick={() => {
-                            setSelectedProduct(product);
+                            setEditingProduct(product);
                             setShowStockModal(true);
                           }}
                           className={`font-medium ${lowStock ? "text-orange-600" : "text-gray-900"} hover:underline`}
@@ -448,16 +525,16 @@ export function InventoryPage() {
       )}
 
       {/* Stock Management Modal */}
-      {showStockModal && selectedProduct && (
+      {showStockModal && editingProduct && (
         <StockModal
-          product={selectedProduct}
+          product={editingProduct}
           locations={locations}
           onClose={() => {
             setShowStockModal(false);
-            setSelectedProduct(null);
+            setEditingProduct(null);
           }}
           onUpdate={(locationId, adjustment, reason) => {
-            handleUpdateStock(selectedProduct.id, locationId, adjustment, reason);
+            handleUpdateStock(editingProduct.id, locationId, adjustment, reason);
           }}
         />
       )}
@@ -612,7 +689,7 @@ function ProductModal({
                 step="0.01"
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 value={formData.price}
-                onChange={(e) => setFormData({ ...formData, price: parseFloat(e.target.value) })}
+                onChange={(e) => setFormData({ ...formData, price: parseFloat(e.target.value) || 0 })}
               />
             </div>
 
@@ -626,7 +703,7 @@ function ProductModal({
                 step="0.01"
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 value={formData.costPrice}
-                onChange={(e) => setFormData({ ...formData, costPrice: parseFloat(e.target.value) })}
+                onChange={(e) => setFormData({ ...formData, costPrice: parseFloat(e.target.value) || 0 })}
               />
             </div>
           </div>
@@ -653,7 +730,7 @@ function ProductModal({
                 min="0"
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 value={formData.minStockLevel}
-                onChange={(e) => setFormData({ ...formData, minStockLevel: parseInt(e.target.value) })}
+                onChange={(e) => setFormData({ ...formData, minStockLevel: parseInt(e.target.value) || 0 })}
               />
             </div>
           )}

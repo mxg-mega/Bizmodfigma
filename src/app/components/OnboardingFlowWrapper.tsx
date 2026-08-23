@@ -2,12 +2,13 @@ import { useNavigate } from "react-router";
 import { OnboardingFlow, OnboardingData } from "./OnboardingFlow";
 import { useBusiness } from "../context/BusinessContext";
 import { useAuth } from "../context/AuthContext";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 export function OnboardingFlowWrapper() {
   const navigate = useNavigate();
   const { createBusiness, createLocation } = useBusiness();
   const { user, loading, setOnboardingCompleted, onboardingCompleted } = useAuth();
+  const [error, setError] = useState<string | null>(null);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -27,6 +28,7 @@ export function OnboardingFlowWrapper() {
 
   const handleComplete = async (data: OnboardingData) => {
     try {
+      setError(null);
       console.log('Onboarding completed, creating business...');
       
       // Create the business
@@ -35,9 +37,12 @@ export function OnboardingFlowWrapper() {
         industry: data.industry,
         currency: data.currency,
       });
+      
+      console.log('Business created successfully:', business);
 
       // Create default location
       if (data.locations.length > 0) {
+        console.log('Creating location for business:', business.id);
         await createLocation({
           businessId: business.id,
           name: data.locations[0],
@@ -47,15 +52,26 @@ export function OnboardingFlowWrapper() {
           country: "Nigeria",
           isDefault: true,
         });
+        console.log('Location created successfully');
       }
 
       // Mark onboarding as completed
       setOnboardingCompleted(true);
       console.log('Onboarding marked as complete, navigating to dashboard');
 
-      navigate("/dashboard");
+      // Small delay to ensure state updates
+      setTimeout(() => {
+        navigate("/dashboard");
+      }, 100);
     } catch (error) {
       console.error("Error completing onboarding:", error);
+      setError(error instanceof Error ? error.message : "An error occurred during onboarding");
+      
+      // Still navigate to dashboard after showing error
+      setTimeout(() => {
+        setOnboardingCompleted(true);
+        navigate("/dashboard");
+      }, 2000);
     }
   };
 
@@ -76,5 +92,16 @@ export function OnboardingFlowWrapper() {
     return null;
   }
 
-  return <OnboardingFlow onComplete={handleComplete} />;
+  return (
+    <>
+      <OnboardingFlow onComplete={handleComplete} />
+      {error && (
+        <div className="fixed bottom-4 right-4 bg-red-50 border border-red-200 text-red-800 px-4 py-3 rounded-lg shadow-lg max-w-md">
+          <p className="font-semibold">Setup Error</p>
+          <p className="text-sm">{error}</p>
+          <p className="text-xs mt-1 text-red-600">Redirecting to dashboard...</p>
+        </div>
+      )}
+    </>
+  );
 }

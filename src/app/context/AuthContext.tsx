@@ -2,13 +2,14 @@ import { createContext, useContext, useEffect, useState, ReactNode } from 'react
 import type { User, Session, AuthError } from '@supabase/supabase-js';
 import { supabase } from '../utils/supabaseClient';
 import { appCache } from '../utils/localCache';
+import { projectId, publicAnonKey } from '/utils/supabase/info';
 
 interface AuthContextType {
   user: User | null;
   session: Session | null;
   loading: boolean;
   onboardingCompleted: boolean;
-  setOnboardingCompleted: (completed: boolean) => void;
+  setOnboardingCompleted: (completed: boolean) => Promise<void>;
   signUp: (email: string, password: string, name: string) => Promise<{ error: AuthError | null }>;
   signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>;
   signInWithGoogle: () => Promise<{ error: AuthError | null }>;
@@ -22,6 +23,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [onboardingCompleted, setOnboardingCompletedState] = useState(false);
+
+  const apiUrl = `https://${projectId}.supabase.co/functions/v1/make-server-6451509a`;
+
+  const getAuthHeader = () => {
+    const session = JSON.parse(localStorage.getItem("supabase.auth.token") || "{}");
+    const accessToken = session?.currentSession?.access_token || publicAnonKey;
+    return { Authorization: `Bearer ${accessToken}` };
+  };
+
+  // Helper to detect if we're in demo mode (using mock tokens)
+  const isDemoMode = () => {
+    try {
+      const sessionStr = localStorage.getItem('supabase.auth.token');
+      if (!sessionStr) return false;
+      const session = JSON.parse(sessionStr);
+      const token = session?.currentSession?.access_token;
+      // Demo tokens start with 'token-' or are 'demo-token'
+      return token && (token.startsWith('token-') || token === 'demo-token');
+    } catch {
+      return false;
+    }
+  };
 
   useEffect(() => {
     // Check active session
@@ -89,12 +112,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Wrapper to save onboarding status to localStorage
-  const setOnboardingCompleted = (completed: boolean) => {
+  // Wrapper to save onboarding status to localStorage and server
+  const setOnboardingCompleted = async (completed: boolean) => {
     setOnboardingCompletedState(completed);
-    if (user) {
-      localStorage.setItem(`onboarding-completed-${user.id}`, completed.toString());
-      console.log('Onboarding status saved:', completed);
+    if (!user) return;
+    
+    // Save to localStorage first for immediate availability
+    localStorage.setItem(`onboarding-completed-${user.id}`, completed.toString());
+    console.log('✅ Onboarding status saved to localStorage:', completed);
+    
+    // Skip server call if in demo mode
+    if (isDemoMode()) {
+      console.log('📝 Demo mode - skipping server sync for onboarding status');
+      return;
+    }
+    
+    // Try to save to server for real Supabase users
+    try {
+      const response = await fetch(`${apiUrl}/user/preferences`, {
+        method: 'POST',
+        headers: {
+          ...getAuthHeader(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ onboardingCompleted: completed }),
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ Onboarding status saved to server:', result);
+      } else {
+        const errorText = await response.text();
+        console.warn('⚠️ Failed to save onboarding status to server (localStorage is active):', response.status, errorText);
+      }
+    } catch (error) {
+      console.warn('⚠️ Error saving onboarding status to server (localStorage is active):', error);
     }
   };
 
@@ -107,47 +159,115 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       console.log('Attempting signup with:', { email: trimmedEmail, name: trimmedName });
       
-      // For demo purposes, accept any signup and create a mock user
-      // This allows testing without requiring real Supabase email configuration
-      const userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      const mockUser = {
-        id: userId,
-        email: trimmedEmail,
-        user_metadata: {
+      // First, try to create user in Supabase via the server
+      try {
+        console.log('Trying to create user in Supabase...');
+        const response = await fetch(`${apiUrl}/signup`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            email: trimmedEmail,
+            password: trimmedPassword,
+            name: trimmedName,
+          }),
+        });
+
+        console.log('Signup response status:', response.status);
+        const responseText = await response.text();
+        console.log('Signup response text:', responseText);
+
+        let result;
+        try {
+          result = JSON.parse(responseText);
+        } catch (parseError) {
+          console.error('Failed to parse signup response:', parseError);
+          throw new Error(`Invalid response from server: ${responseText.substring(0, 100)}`);
+        }
+        
+        if (response.ok && result.user) {
+          console.log('✅ User created in Supabase successfully!', result.user.id);
+          
+          // Now sign them in to get a session
+          try {
+            const { data, error } = await supabase.auth.signInWithPassword({
+              email: trimmedEmail,
+              password: trimmedPassword,
+            });
+
+            if (error) {
+              console.error('Signup successful but signin failed:', error);
+              return { 
+                error: { 
+                  message: 'Account created successfully! Please sign in with your credentials.' 
+                } as AuthError 
+              };
+            }
+
+            console.log('✅ User signed in successfully after signup!');
+            // Session is automatically set via onAuthStateChange listener
+            return { error: null };
+          } catch (signInNetworkError) {
+            console.error('Network error during sign in after signup:', signInNetworkError);
+            return { 
+              error: { 
+                message: 'Account created successfully! Please sign in with your credentials.' 
+              } as AuthError 
+            };
+          }
+        } else {
+          console.error('Supabase signup failed:', result.error);
+          throw new Error(result.error || 'Supabase signup failed');
+        }
+      } catch (serverError) {
+        console.error('❌ Server signup failed, falling back to demo mode:', serverError);
+        console.log('📝 NOTE: This is expected if the Supabase Edge Function is not deployed.');
+        console.log('📝 User will be created locally and can complete onboarding normally.');
+        console.log('📝 All data will be stored in localStorage until server is available.');
+        
+        // Fallback to demo mode if server is unavailable
+        console.log('Creating demo user locally...');
+        const userId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const mockUser = {
+          id: userId,
+          email: trimmedEmail,
+          user_metadata: {
+            name: trimmedName,
+          },
+          app_metadata: {},
+          aud: 'authenticated',
+          created_at: new Date().toISOString(),
+        } as User;
+
+        const mockSession = {
+          access_token: `token-${userId}`,
+          refresh_token: `refresh-${userId}`,
+          expires_in: 3600,
+          token_type: 'bearer',
+          user: mockUser,
+        } as Session;
+
+        // Store user credentials for future login
+        const users = JSON.parse(localStorage.getItem('demo-users') || '{}');
+        users[trimmedEmail] = {
+          password: trimmedPassword,
           name: trimmedName,
-        },
-        app_metadata: {},
-        aud: 'authenticated',
-        created_at: new Date().toISOString(),
-      } as User;
+          userId: userId,
+        };
+        localStorage.setItem('demo-users', JSON.stringify(users));
 
-      const mockSession = {
-        access_token: `token-${userId}`,
-        refresh_token: `refresh-${userId}`,
-        expires_in: 3600,
-        token_type: 'bearer',
-        user: mockUser,
-      } as Session;
-
-      // Store user credentials for future login
-      const users = JSON.parse(localStorage.getItem('demo-users') || '{}');
-      users[trimmedEmail] = {
-        password: trimmedPassword,
-        name: trimmedName,
-        userId: userId,
-      };
-      localStorage.setItem('demo-users', JSON.stringify(users));
-
-      setUser(mockUser);
-      setSession(mockSession);
-      
-      // Store session in localStorage
-      localStorage.setItem('supabase.auth.token', JSON.stringify({
-        currentSession: mockSession,
-      }));
-      
-      console.log('Demo signup successful!');
-      return { error: null };
+        setUser(mockUser);
+        setSession(mockSession);
+        
+        // Store session in localStorage
+        localStorage.setItem('supabase.auth.token', JSON.stringify({
+          currentSession: mockSession,
+        }));
+        
+        console.log('✅ Demo signup successful (offline mode)!');
+        return { error: null };
+      }
     } catch (error) {
       console.error('Signup exception:', error);
       return { error: error as AuthError };
@@ -241,19 +361,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('No demo user found, trying real Supabase auth...');
       
       // Try real Supabase authentication
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: trimmedEmail,
-        password: trimmedPassword,
-      });
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: trimmedEmail,
+          password: trimmedPassword,
+        });
 
-      if (error) {
-        console.error('Sign in error:', error);
-        // If Supabase auth fails, suggest using sign up or demo credentials
-        return { error: { message: 'Invalid credentials. Please sign up first or use demo@bizmod.ng with password BizMod2024!' } as AuthError };
+        if (error) {
+          console.error('Sign in error:', error);
+          // If Supabase auth fails, suggest using sign up or demo credentials
+          return { error: { message: 'Invalid credentials. Please sign up first or use demo@bizmod.ng with password BizMod2024!' } as AuthError };
+        }
+
+        console.log('Sign in successful!', data);
+        return { error: null };
+      } catch (networkError) {
+        console.error('Network error during Supabase sign in:', networkError);
+        // Network error - likely server unavailable or no internet
+        return { 
+          error: { 
+            message: 'Unable to connect to authentication server. Please check your internet connection or try again later.' 
+          } as AuthError 
+        };
       }
-
-      console.log('Sign in successful!', data);
-      return { error: null };
     } catch (error) {
       console.error('Sign in exception:', error);
       return { error: error as AuthError };
